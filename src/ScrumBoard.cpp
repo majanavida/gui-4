@@ -33,6 +33,8 @@ bool readId(const json& value, int& id) {
 
 }
 
+ScrumBoard::ScrumBoard(const std::string& name) : name(name) {}
+
 int ScrumBoard::addDeveloper(const std::string& name) {
     if (name.find_first_not_of(" \t\n\r\f\v") == std::string::npos) {
         return 0;
@@ -90,8 +92,11 @@ bool ScrumBoard::changeTaskStatus(int taskId, TaskStatus status) {
     return true;
 }
 
-bool ScrumBoard::saveToFile(const std::string& path) const {
+bool ScrumBoard::saveToFile(const std::filesystem::path& path) const {
     json data = {{"developers", json::array()}, {"tasks", json::array()}};
+    if (!name.empty()) {
+        data["name"] = name;
+    }
     for (const Developer& developer : developers) {
         data["developers"].push_back({{"id", developer.id}, {"name", developer.name}});
     }
@@ -126,7 +131,7 @@ bool ScrumBoard::saveToFile(const std::string& path) const {
     return file.good();
 }
 
-bool ScrumBoard::loadFromFile(const std::string& path) {
+bool ScrumBoard::loadFromFile(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
         return false;
@@ -136,6 +141,12 @@ bool ScrumBoard::loadFromFile(const std::string& path) {
     const char* whitespace = " \t\n\r\f\v";
     try {
         const json data = json::parse(file);
+        if (data.contains("name")) {
+            board.name = data.at("name").get<std::string>();
+            if (board.name.find_first_not_of(whitespace) == std::string::npos) {
+                return false;
+            }
+        }
         const json& developerList = data.at("developers");
         const json& taskList = data.at("tasks");
         if (!developerList.is_array() || !taskList.is_array()) {
@@ -188,6 +199,10 @@ bool ScrumBoard::loadFromFile(const std::string& path) {
 
     *this = std::move(board);
     return true;
+}
+
+const std::string& ScrumBoard::getName() const {
+    return name;
 }
 
 const std::vector<Developer>& ScrumBoard::getDevelopers() const {

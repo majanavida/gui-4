@@ -31,6 +31,7 @@ private:
     int nextDeveloperId = 1;
     int nextTaskId = 1;
 
+    bool hasDeveloper(int developerId) const;
     Task* findTask(int taskId);
 
 public:
@@ -38,6 +39,9 @@ public:
     int addTask(const std::string& title);
     bool assignTask(int taskId, int developerId);
     bool changeTaskStatus(int taskId, TaskStatus status);
+
+    bool saveToFile(const std::string& path) const;
+    bool loadFromFile(const std::string& path);
 
     const std::vector<Developer>& getDevelopers() const;
     const std::vector<Task>& getTasks() const;

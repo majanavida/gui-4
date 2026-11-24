@@ -1,6 +1,7 @@
 #ifndef SCRUM_BOARD_H
 #define SCRUM_BOARD_H
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ struct Task {
 
 class ScrumBoard {
 private:
+    std::string name;
     std::vector<Developer> developers;
     std::vector<Task> tasks;
     int nextDeveloperId = 1;
@@ -35,14 +37,18 @@ private:
     Task* findTask(int taskId);
 
 public:
+    ScrumBoard() = default;
+    explicit ScrumBoard(const std::string& name);
+
     int addDeveloper(const std::string& name);
     int addTask(const std::string& title);
     bool assignTask(int taskId, int developerId);
     bool changeTaskStatus(int taskId, TaskStatus status);
 
-    bool saveToFile(const std::string& path) const;
-    bool loadFromFile(const std::string& path);
+    bool saveToFile(const std::filesystem::path& path) const;
+    bool loadFromFile(const std::filesystem::path& path);
 
+    const std::string& getName() const;
     const std::vector<Developer>& getDevelopers() const;
     const std::vector<Task>& getTasks() const;
 };

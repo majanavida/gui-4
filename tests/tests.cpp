@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 
 #include "ScrumBoard.h"
 
@@ -145,7 +145,7 @@ TEST(ScrumBoardTest, RejectsStatusChangeForBacklogOrUnknownTask) {
 class ScrumBoardFileTest : public testing::Test {
 protected:
     std::filesystem::path path = std::filesystem::temp_directory_path() /
-        ("gui-4 board-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt");
+        ("gui-4 board-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
 
     void TearDown() override {
         std::filesystem::remove(path);
@@ -165,26 +165,32 @@ TEST_F(ScrumBoardFileTest, SavesAndLoadsEmptyBoard) {
 }
 
 TEST_F(ScrumBoardFileTest, SavesAndLoadsAllCategoriesWithGapsInIds) {
-    const std::string data =
-        "2\r\n7 \"Anna \\\"QA\\\"\"\r\n3 \"Ivan Petrov\"\r\n"
-        "5\r\n5 0 Backlog \"Write tests\"\r\n12 7 Assigned \"Fix a \\\"bug\\\"\"\r\n"
-        "7 3 InProgress \"Update README\"\r\n9 7 Blocked \"Review changes\"\r\n"
-        "10 3 Done \"Build project\"\r\n";
-    std::ofstream(path, std::ios::binary) << data;
+    const char* data = u8R"({
+        "developers": [{"id": 7, "name": "Анна \"QA\""}, {"id": 3, "name": "Ivan Petrov"}],
+        "tasks": [
+            {"id": 5, "title": "Написать тесты", "developerId": 0, "status": null},
+            {"id": 12, "title": "Fix a \"bug\"", "developerId": 7, "status": "Assigned"},
+            {"id": 7, "title": "Update README", "developerId": 3, "status": "InProgress"},
+            {"id": 9, "title": "Review changes", "developerId": 7, "status": "Blocked"},
+            {"id": 10, "title": "Build project", "developerId": 3, "status": "Done"}
+        ]
+    })";
+    std::ofstream(path) << data;
 
     ScrumBoard board;
     board.addDeveloper("Old developer");
     board.addTask("Old task");
     ASSERT_TRUE(board.loadFromFile(path.string()));
+
     const auto& developers = board.getDevelopers();
     ASSERT_EQ(developers.size(), 2u);
     EXPECT_EQ(developers[0].id, 7);
-    EXPECT_EQ(developers[0].name, "Anna \"QA\"");
+    EXPECT_EQ(developers[0].name, u8"Анна \"QA\"");
     EXPECT_EQ(developers[1].id, 3);
     EXPECT_EQ(developers[1].name, "Ivan Petrov");
 
     const Task expected[] = {
-        {5, "Write tests", 0, std::nullopt},
+        {5, u8"Написать тесты", 0, std::nullopt},
         {12, "Fix a \"bug\"", 7, TaskStatus::Assigned},
         {7, "Update README", 3, TaskStatus::InProgress},
         {9, "Review changes", 7, TaskStatus::Blocked},
@@ -200,10 +206,8 @@ TEST_F(ScrumBoardFileTest, SavesAndLoadsAllCategoriesWithGapsInIds) {
     }
 
     ASSERT_TRUE(board.saveToFile(path.string()));
-    std::ifstream savedFile(path, std::ios::binary);
-    std::ostringstream savedData;
-    savedData << savedFile.rdbuf();
-    EXPECT_EQ(savedData.str(), data);
+    std::ifstream savedFile(path);
+    EXPECT_EQ(nlohmann::json::parse(savedFile), nlohmann::json::parse(data));
     EXPECT_EQ(board.addDeveloper("Pavel"), 8);
     EXPECT_EQ(board.addTask("New task"), 13);
 }
@@ -216,11 +220,17 @@ TEST_F(ScrumBoardFileTest, KeepsCurrentBoardWhenLoadFails) {
 
     const char* invalidFiles[] = {
         nullptr,
-        "1\n7 \"Ivan\"\n1\n9 7 Assigned \"Fix bugs",
-        "1\n7 \"Ivan\"\n1\n9 7 Unknown \"Fix bugs\"\n",
-        "2\n7 \"Ivan\"\n7 \"Pavel\"\n0\n",
-        "0\n2\n9 0 Backlog \"Fix bugs\"\n9 0 Backlog \"Build project\"\n",
-        "1\n7 \"Ivan\"\n1\n9 8 Done \"Fix bugs\"\n"
+        R"({"developers":[],"tasks":[)",
+        R"({"developers":[],"tasks":[{"id":9,"title":"A","developerId":0}]})",
+        R"({"developers":[{"id":7.5,"name":"Ivan"}],"tasks":[]})",
+        R"({"developers":[{"id":7,"name":"Ivan"}],)"
+        R"("tasks":[{"id":9,"title":"A","developerId":7,"status":"Unknown"}]})",
+        R"({"developers":[{"id":7,"name":"Ivan"},{"id":7,"name":"Pavel"}],"tasks":[]})",
+        R"({"developers":[],"tasks":[{"id":9,"title":"A","developerId":0,"status":null},)"
+        R"({"id":9,"title":"B","developerId":0,"status":null}]})",
+        R"({"developers":[],"tasks":[{"id":9,"title":"A","developerId":8,"status":"Done"}]})",
+        R"({"developers":[{"id":7,"name":"Ivan"}],)"
+        R"("tasks":[{"id":9,"title":"A","developerId":7,"status":null}]})"
     };
     for (const char* data : invalidFiles) {
         SCOPED_TRACE(data == nullptr ? "missing file" : data);
@@ -245,5 +255,5 @@ TEST_F(ScrumBoardFileTest, KeepsCurrentBoardWhenLoadFails) {
 
 TEST_F(ScrumBoardFileTest, ReturnsFalseWhenSavePathIsUnavailable) {
     ScrumBoard board;
-    EXPECT_FALSE(board.saveToFile((path / "board.txt").string()));
+    EXPECT_FALSE(board.saveToFile((path / "board.json").string()));
 }

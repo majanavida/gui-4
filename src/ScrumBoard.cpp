@@ -2,24 +2,34 @@
 
 #include <algorithm>
 #include <fstream>
-#include <iomanip>
-#include <limits>
 #include <utility>
+
+#include <nlohmann/json.hpp>
 
 namespace {
 
+using nlohmann::json;
+
 struct StatusName {
-    std::optional<TaskStatus> status;
+    TaskStatus status;
     const char* name;
 };
 
 const StatusName statusNames[] = {
-    {std::nullopt, "Backlog"},
     {TaskStatus::Assigned, "Assigned"},
     {TaskStatus::InProgress, "InProgress"},
     {TaskStatus::Blocked, "Blocked"},
     {TaskStatus::Done, "Done"}
 };
+
+bool readId(const json& value, int& id) {
+    if (!value.is_number_integer()) {
+        return false;
+    }
+
+    id = value.get<int>();
+    return true;
+}
 
 }
 
@@ -81,91 +91,98 @@ bool ScrumBoard::changeTaskStatus(int taskId, TaskStatus status) {
 }
 
 bool ScrumBoard::saveToFile(const std::string& path) const {
-    std::ofstream file(path, std::ios::binary);
-    if (!file) {
+    json data = {{"developers", json::array()}, {"tasks", json::array()}};
+    for (const Developer& developer : developers) {
+        data["developers"].push_back({{"id", developer.id}, {"name", developer.name}});
+    }
+
+    for (const Task& task : tasks) {
+        json status = nullptr;
+        if (task.status) {
+            for (const StatusName& entry : statusNames) {
+                if (entry.status == *task.status) {
+                    status = entry.name;
+                    break;
+                }
+            }
+            if (status.is_null()) {
+                return false;
+            }
+        }
+        data["tasks"].push_back({{"id", task.id}, {"title", task.title},
+                                 {"developerId", task.developerId}, {"status", status}});
+    }
+
+    std::string text;
+    try {
+        text = data.dump(2);
+    } catch (const json::type_error&) {
         return false;
     }
 
-    file << developers.size() << "\r\n";
-    for (const Developer& developer : developers) {
-        file << developer.id << ' ' << std::quoted(developer.name) << "\r\n";
-    }
-
-    file << tasks.size() << "\r\n";
-    for (const Task& task : tasks) {
-        const char* name = nullptr;
-        for (const StatusName& entry : statusNames) {
-            if (entry.status == task.status) {
-                name = entry.name;
-                break;
-            }
-        }
-        if (name == nullptr) {
-            return false;
-        }
-        file << task.id << ' ' << task.developerId << ' ' << name << ' '
-             << std::quoted(task.title) << "\r\n";
-    }
-
+    std::ofstream file(path);
+    file << text << '\n';
     file.close();
     return file.good();
 }
 
 bool ScrumBoard::loadFromFile(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return false;
+    }
+
     ScrumBoard board;
-    const int maxId = std::numeric_limits<int>::max();
     const char* whitespace = " \t\n\r\f\v";
-
-    int developerCount;
-    if (!(file >> developerCount) || developerCount < 0) {
-        return false;
-    }
-    for (int i = 0; i < developerCount; ++i) {
-        Developer developer;
-        if (!(file >> developer.id >> std::ws) || file.peek() != '"'
-            || !(file >> std::quoted(developer.name)) || developer.id <= 0 || developer.id == maxId
-            || developer.name.find_first_not_of(whitespace) == std::string::npos
-            || board.hasDeveloper(developer.id)) {
-            return false;
-        }
-        board.developers.push_back(developer);
-        board.nextDeveloperId = std::max(board.nextDeveloperId, developer.id + 1);
-    }
-
-    int taskCount;
-    if (!(file >> taskCount) || taskCount < 0) {
-        return false;
-    }
-    for (int i = 0; i < taskCount; ++i) {
-        Task task;
-        std::string name;
-        if (!(file >> task.id >> task.developerId >> name >> std::ws) || file.peek() != '"'
-            || !(file >> std::quoted(task.title)) || task.id <= 0 || task.id == maxId
-            || task.title.find_first_not_of(whitespace) == std::string::npos
-            || board.findTask(task.id) != nullptr) {
+    try {
+        const json data = json::parse(file);
+        const json& developerList = data.at("developers");
+        const json& taskList = data.at("tasks");
+        if (!developerList.is_array() || !taskList.is_array()) {
             return false;
         }
 
-        bool statusFound = false;
-        for (const StatusName& entry : statusNames) {
-            if (name == entry.name) {
-                task.status = entry.status;
-                statusFound = true;
-                break;
+        for (const json& item : developerList) {
+            Developer developer;
+            developer.name = item.at("name").get<std::string>();
+            if (!readId(item.at("id"), developer.id) || developer.id <= 0
+                || board.hasDeveloper(developer.id)
+                || developer.name.find_first_not_of(whitespace) == std::string::npos) {
+                return false;
             }
-        }
-        if (!statusFound || (task.status && !board.hasDeveloper(task.developerId))
-            || (!task.status && task.developerId != 0)) {
-            return false;
+
+            board.developers.push_back(developer);
+            board.nextDeveloperId = std::max(board.nextDeveloperId, developer.id + 1);
         }
 
-        board.tasks.push_back(task);
-        board.nextTaskId = std::max(board.nextTaskId, task.id + 1);
-    }
+        for (const json& item : taskList) {
+            Task task;
+            task.title = item.at("title").get<std::string>();
+            if (!readId(item.at("id"), task.id) || task.id <= 0 || board.findTask(task.id) != nullptr
+                || !readId(item.at("developerId"), task.developerId)
+                || task.title.find_first_not_of(whitespace) == std::string::npos) {
+                return false;
+            }
 
-    file >> std::ws;
-    if (file.bad() || !file.eof()) {
+            const json& status = item.at("status");
+            if (status.is_string()) {
+                for (const StatusName& entry : statusNames) {
+                    if (status == entry.name) {
+                        task.status = entry.status;
+                        break;
+                    }
+                }
+                if (!task.status || !board.hasDeveloper(task.developerId)) {
+                    return false;
+                }
+            } else if (!status.is_null() || task.developerId != 0) {
+                return false;
+            }
+
+            board.tasks.push_back(task);
+            board.nextTaskId = std::max(board.nextTaskId, task.id + 1);
+        }
+    } catch (const json::exception&) {
         return false;
     }
 
